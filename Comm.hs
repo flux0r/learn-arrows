@@ -55,3 +55,6 @@ comb :: Comm1 o' o -> Comm1 i o' -> Comm1 i o
 comb (More f) (More g)  = More $ \i -> comb (More f) (g i)
 comb (More f) (End x c) = comb (f x) c
 comb (End x c1) c0      = End x (comb c1 c0)
+
+unitC :: Comm1 o o
+unitC = More (\x -> unitC)
