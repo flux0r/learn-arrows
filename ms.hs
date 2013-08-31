@@ -1,6 +1,8 @@
 import Control.Applicative ((<$>))
 import Data.Monoid
 
+infixl 8 <<-
+
 data Process i o = Emit [o] (Process i o)
                 | Await (i -> Process i o) (Process i o)
                 | Halt
@@ -40,16 +42,6 @@ Halt                `bind`  _ = Halt
 unit :: o -> Process i o
 unit = flip emit Halt
 
-iter :: (o' -> Process o' o)
-    -> Process o' o
-    -> [o']
-    -> Process i o'
-    -> Process i o
-iter f p [] p'      = Await f p <<- p'
-iter f p (x:xs) p'  = case f x of
-   (Await f' pp)       -> iter f' pp xs p'
-   pp                  -> pp <<- (Emit xs p')
-
 repeatP :: Process i o -> Process i o
 repeatP p = iter p
  where
@@ -64,6 +56,12 @@ pp@(Await f0 p0)    <<- p'  = case p' of
        (Emit os1 p1)   -> iter f0 p0 os1 p1
        Halt            -> p0 <<- Halt
        (Await g0 p1)   -> Await (\ i -> pp <<- g0 i) (p0 <<- p1)
+  where
+    iter f p [] p'      = Await f p <<- p'
+    iter f p (x:xs) p'  = case f x of
+       (Await f' pp)       -> iter f' pp xs p'
+       pp                  -> pp <<- (Emit xs p')
+
 
 idP = lift id
 
@@ -106,8 +104,31 @@ takeWhileP f = Await guard (takeWhileP f)
         | f x       = emit x $ takeWhileP f
         | otherwise = Halt
 
-dropWhileP f = Await guard (dropWhileP f)
+dropWhileP :: (a -> Bool) -> Process a a
+dropWhileP f = repeatP $ Await guard (dropWhileP f)
   where
     guard x
         | f x       = dropWhileP f
         | otherwise = idP
+
+countP :: Process i Integer
+countP = lift (toInteger . floor) <<- sumP <<- lift (const 1.0)
+
+meanP = iter 0.0 0.0
+  where
+    iter summ n = Await
+        (\ x -> let summ' = summ + x
+                    n' = n + 1
+                in  emit ((summ + x)/(n + 1)) $ iter summ' n')
+        Halt
+
+iter :: a -> (a -> i -> (o, a)) -> Process i o
+iter acc f = Await
+    (\ i -> let (o, acc') = f acc i
+            in  emit o (iter acc' f))
+    Halt
+
+sumIter :: Process Double Double
+sumIter = iter 0.0 (\ x y -> (x + y, x + y))
+
+countIter = iter 0 (\ acc i -> (acc, acc + 1))
