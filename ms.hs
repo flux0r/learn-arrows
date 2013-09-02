@@ -1,7 +1,11 @@
 import Control.Applicative ((<$>))
 import Data.Monoid
+import Debug.Trace
 
-infixl 8 <<-
+infixl 6 <<-
+
+main = do
+    putStrLn (show $ apply (zipP idP idP) [3.1, 1.4, 9.3])
 
 data Process i o = Emit [o] (Process i o)
                 | Await (i -> Process i o) (Process i o)
@@ -12,6 +16,7 @@ apply Halt              _       = []
 apply (Emit os p)       xs      = os ++ apply p xs
 apply (Await receive p) (x:xs)  = apply (receive x) xs
 apply (Await _ p)       []      = apply Halt []
+
 
 emitAll :: [o] -> Process i o -> Process i o
 emitAll os (Emit os' p) = Emit (os ++ os') p
@@ -25,6 +30,7 @@ mapP f (Await receive p)    = Await (mapP f . receive) (mapP f p)
 instance Functor (Process i) where
     fmap = mapP
 
+emit :: a -> Process i a -> Process i a
 emit o p = emitAll [o] p
 
 combine :: Process i o -> Process i o -> Process i o
@@ -114,6 +120,7 @@ dropWhileP f = repeatP $ Await guard (dropWhileP f)
 countP :: Process i Integer
 countP = lift (toInteger . floor) <<- sumP <<- lift (const 1.0)
 
+meanP :: Process Double Double
 meanP = iter 0.0 0.0
   where
     iter summ n = Await
@@ -131,4 +138,34 @@ iter acc f = Await
 sumIter :: Process Double Double
 sumIter = iter 0.0 (\ x y -> (x + y, x + y))
 
-countIter = iter 0 (\ acc i -> (acc, acc + 1))
+countIter :: Process i Integer
+countIter = iter 1 (\ acc i -> (acc, acc + 1))
+
+zipRemainder :: (a -> b -> c) -> [a] -> [b] -> ([c], ([a], [b]))
+zipRemainder f [] []            = ([], ([], []))
+zipRemainder f xs []            = ([], (xs, []))
+zipRemainder f [] ys            = ([], ([], ys))
+zipRemainder f (x:xs) (y:ys)    =
+    let r = zipRemainder f xs ys
+    in  ((x `f` y):(fst r), (fst . snd $ r, snd . snd $ r))
+
+zipP :: Process a b -> Process a c -> Process a (b, c)
+zipP (Emit bs p1) (Await g p2) = Await (\ i ->
+    zipP (Emit bs p1) (g i)) (zipP p1 p2)
+zipP (Await f p1) (Emit cs p2) = Await (\ i ->
+    zipP (f i) (Emit cs p2)) (zipP p1 p2)
+zipP _ Halt = Halt
+zipP Halt _ = Halt
+zipP (Emit bs p1) (Emit cs p2) = Emit bc (zipP p1' p2')
+  where
+    (bc, (rb, rc)) = zipRemainder (,) bs cs
+    mkP [] p = p
+    mkP xs p = Emit xs p
+    p1' = mkP rb p1
+    p2' = mkP rc p2
+zipP (Await f p1) (Await g p2) = Await (\ i ->
+        (zipP (f i) (g i))) (zipP p1 p2)
+
+zippedMean = lift avg <<- zipP sumP (lift fromIntegral <<- countP)
+  where
+    avg (n, d) = n/d
