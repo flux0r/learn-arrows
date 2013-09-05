@@ -1,6 +1,10 @@
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+
 import Control.Applicative ((<$>))
 import Data.Monoid
 import Debug.Trace
+import Control.Exception (onException)
 
 infixl 6 <<-
 
@@ -68,7 +72,7 @@ pp@(Await f0 p0)    <<- p'  = case p' of
        (Await f' pp)       -> iter f' pp xs p'
        pp                  -> pp <<- (Emit xs p')
 
-
+idP :: Process o o
 idP = lift id
 
 lift :: (i -> o) -> Process i o
@@ -118,22 +122,23 @@ dropWhileP f = repeatP $ Await guard (dropWhileP f)
         | otherwise = idP
 
 countP :: Process i Integer
-countP = lift (toInteger . floor) <<- sumP <<- lift (const 1.0)
+countP = lift floor <<- sumP <<- lift (const 1)
 
 meanP :: Process Double Double
 meanP = iter 0.0 0.0
   where
-    iter summ n = Await
-        (\ x -> let summ' = summ + x
+    iter summ n =
+        Await (\ x ->
+                let summ' = summ + x
                     n' = n + 1
                 in  emit ((summ + x)/(n + 1)) $ iter summ' n')
-        Halt
+              Halt
 
 iter :: a -> (a -> i -> (o, a)) -> Process i o
-iter acc f = Await
-    (\ i -> let (o, acc') = f acc i
-            in  emit o (iter acc' f))
-    Halt
+iter acc f =
+    Await (\ i -> let (o, acc') = f acc i
+                in  emit o (iter acc' f))
+          Halt
 
 sumIter :: Process Double Double
 sumIter = iter 0.0 (\ x y -> (x + y, x + y))
@@ -150,10 +155,12 @@ zipRemainder f (x:xs) (y:ys)    =
     in  ((x `f` y):(fst r), (fst . snd $ r, snd . snd $ r))
 
 zipP :: Process a b -> Process a c -> Process a (b, c)
-zipP (Emit bs p1) (Await g p2) = Await (\ i ->
-    zipP (Emit bs p1) (g i)) (zipP p1 p2)
-zipP (Await f p1) (Emit cs p2) = Await (\ i ->
-    zipP (f i) (Emit cs p2)) (zipP p1 p2)
+zipP (Emit bs p1) (Await g p2) =
+    Await (\ i -> zipP (Emit bs p1) (g i))
+          (zipP p1 p2)
+zipP (Await f p1) (Emit cs p2) =
+    Await (\ i -> zipP (f i) (Emit cs p2))
+          (zipP p1 p2)
 zipP _ Halt = Halt
 zipP Halt _ = Halt
 zipP (Emit bs p1) (Emit cs p2) = Emit bc (zipP p1' p2')
@@ -163,9 +170,49 @@ zipP (Emit bs p1) (Emit cs p2) = Emit bc (zipP p1' p2')
     mkP xs p = Emit xs p
     p1' = mkP rb p1
     p2' = mkP rc p2
-zipP (Await f p1) (Await g p2) = Await (\ i ->
-        (zipP (f i) (g i))) (zipP p1 p2)
+zipP (Await f p1) (Await g p2) =
+    Await (\ i -> (zipP (f i) (g i)))
+          (zipP p1 p2)
 
-zippedMean = lift avg <<- zipP sumP (lift fromIntegral <<- countP)
+zippedMean :: Process Double Double
+zippedMean = let div = lift $ uncurry (/) in
+    div <<- zipP sumP (lift fromIntegral <<- countP)
+
+zipWithIndex :: Process i o -> Process i (o, Integer)
+zipWithIndex p = zipP p countP
+
+exists :: (a -> Bool) -> Process a Bool
+exists f = iter False (\ acc x -> (acc || x, acc || x)) <<- lift f
+
+class Source s where
+    (<||) :: Process i o -> s i -> s o
+
+mapS :: Source s => (i -> o) -> s i -> s o
+f `mapS` s = lift f <|| s
+
+filterS :: Source s => (a -> Bool) -> s a -> s a
+filterS f s = filterP f <|| s
+
+data ResourceR o = forall r i.
+    ResourceR (IO r) (r -> IO ()) (r -> IO (Maybe i)) (Process i o)
+
+instance Source ResourceR where
+    p <|| (ResourceR f g h p') = ResourceR f g h (p <<- p')
+
+iterS :: IO [o] -> IO (Maybe i) -> Process i o -> IO () -> IO [o]
+iterS acc k p end = doit
   where
-    avg (n, d) = n/d
+    doit = case p of
+        Halt            -> end >> acc
+        (Emit xs p')    ->
+                let newacc = onException (acc >>= return . (++ xs)) end
+                in  iterS newacc k p' end
+        (Await f p')    -> onException k end >>= check
+          where
+            check Nothing   = iterS acc (return Nothing) p' end
+            check (Just i)  = iterS acc k (f i) end
+
+collect :: ResourceR o -> IO [o]
+collect (ResourceR acquire release step p) = acquire >>= doit
+  where
+    doit r = iterS (return []) (step r) p (release r)
