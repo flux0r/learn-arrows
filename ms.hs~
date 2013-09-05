@@ -243,7 +243,6 @@ data ResourceW i = forall r i'.
 instance Sink ResourceW where
     (ResourceW f g h p) ||> p' = ResourceW f g h (p <<- p')
 
-file :: FilePath -> Bool -> ResourceW String
 file fn append = ResourceW h hClose (\ h -> (\s -> hPutStrLn h s)) idP
   where
     h = openFile fn (if append then AppendMode else WriteMode)
