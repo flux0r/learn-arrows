@@ -5,8 +5,10 @@ import Control.Applicative ((<$>))
 import Data.Monoid
 import Debug.Trace
 import Control.Exception (onException)
+import System.IO (IOMode (ReadMode), openFile, hClose, hIsEOF, hGetLine, readFile)
 
 infixl 6 <<-
+infixl 5 <||
 
 main = do
     putStrLn (show $ apply (zipP idP idP) [3.1, 1.4, 9.3])
@@ -60,7 +62,7 @@ repeatP p = iter p
    iter (Emit xs p')    = Emit xs (iter p')
 
 (<<-) :: Process o' o -> Process i o' -> Process i o
-Halt                <<- _   = Halt <<- Halt
+Halt                <<- _   = Halt
 (Emit os0 p0)       <<- p'  = emitAll os0 (p0 <<- p')
 pp@(Await f0 p0)    <<- p'  = case p' of
        (Emit os1 p1)   -> iter f0 p0 os1 p1
@@ -113,6 +115,9 @@ takeWhileP f = Await guard (takeWhileP f)
     guard x
         | f x       = emit x $ takeWhileP f
         | otherwise = Halt
+
+echo :: Process o o
+echo = Await (\ i -> emit i Halt) Halt
 
 dropWhileP :: (a -> Bool) -> Process a a
 dropWhileP f = repeatP $ Await guard (dropWhileP f)
@@ -216,3 +221,17 @@ collect :: ResourceR o -> IO [o]
 collect (ResourceR acquire release step p) = acquire >>= doit
   where
     doit r = iterS (return []) (step r) p (release r)
+
+--linesS :: FilePath -> ResourceR (IO String)
+linesS fn = ResourceR (openFile fn ReadMode) hClose getL idP
+
+getL h = do
+    c <- hIsEOF h
+    if c
+        then return Nothing
+        else do
+            l <- hGetLine h
+            return $ Just l
+
+gt40k :: FilePath -> ResourceR Bool
+gt40k fn = exists (> 40000) <<- countP <|| linesS fn
