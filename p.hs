@@ -1,7 +1,11 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 import Prelude hiding (repeat)
-import Control.Exception (Exception, onException, throwIO, try)
+import Control.Exception (Exception, IOException, SomeException, onException, throwIO, try)
+import Data.Typeable (Typeable)
+
+main = undefined
 
 data Proc f o = forall i.
                 Await (f i) (i -> Proc f o) (Proc f o) (Proc f o)
@@ -48,15 +52,21 @@ repeat p = let p' = iter p in p'
         (Await req k fb end)    -> Await req (iter . k) fb end
         (Emit os x')            -> emitAll os (iter x')
 
-type Source a = Proc IO a
+class Partial f where
+    attempt :: Exception e => f a -> f (Either e a)
+    failure :: Exception e => e -> f a
 
-failIO :: Exception e => e -> Proc IO a
-failIO = await . throwIO
+data End = End deriving (Show, Typeable, Eq)
+instance Exception End
 
--- collect s = let xs' = iter s [] in xs'
---   where
---     iter cur acc = case cur of
---         Halt                    -> acc
---         (Emit os p)             -> iter p (acc ++ os)
---         (Await req k fb end)    ->
---                 let next = try (req >>= k)
+collect :: (Monad f, Partial f) => Proc f o -> f [o]
+collect p = let iter' = iter p [] in iter'
+  where
+    iter cur acc = case cur of
+        (Emit os p)         -> iter p (acc ++ os)
+        Halt                -> return acc
+        (Await r k p end)   -> attempt r >>= \ att -> case att of
+            (Left e)
+                | e == End      -> iter p acc
+                | otherwise     -> iter (end +-+ await (failure e)) acc
+            (Right a)           -> iter (k a) acc
