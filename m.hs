@@ -5,29 +5,11 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 
-import qualified Prelude as P
-import Prelude (($))
+import Prelude hiding ((.), id)
+import Control.Category
+import Control.Arrow
 
-infixr 8 .
-
-type Obj p a = p a a
-
-class Category p where
-    src :: p a b -> Obj p a
-    tgt :: p a b -> Obj p b
-    (.) :: p b c -> p a b -> p a c
-
-instance Category (->) where
-    src _ = \ x -> x
-    tgt _ = \ x -> x
-    f . g = \ x -> f $ g x
-
-data Dual p a b = Dual { unDual :: p b a }
-
-instance Category p => Category (Dual p) where
-    src = Dual . tgt . unDual
-    tgt = Dual . src . unDual
-    p . q = Dual (unDual q . unDual p)
+main = undefined
 
 data Mealy i o = Mealy (i -> (o, Mealy i o))
 
@@ -38,20 +20,22 @@ data Mealy i o = Mealy (i -> (o, Mealy i o))
     in  (o, m' |.| m)
 
 instance Category Mealy where
-    src m = Mealy $ \ i -> (i, src m)
-    tgt m = Mealy $ \ o -> (o, tgt m)
+    id  = Mealy (\ i -> (i, id))
     (.) = (|.|)
 
-data Prod :: (* -> * -> *) -> (* -> * -> *) -> * -> * -> * where
-    Prod :: p a b -> q c d -> Prod p q (a, c) (b, d)
+liftM :: (i -> o) -> Mealy i o
+liftM f = Mealy $ \ i -> (f i, liftM f)
 
-instance (Category p, Category q) => Category (Prod p q) where
-    src (Prod a a')             = Prod (src a) (src a')
-    tgt (Prod a a')             = Prod (tgt a) (tgt a')
-    (Prod x x') . (Prod y y')   = Prod (x . y) (x' . y')
+firstM :: Mealy i o -> Mealy (i, a) (o, a)
+firstM (Mealy k) = Mealy $ \ (i, a) ->
+    let (o, m) = k i
+    in  ((o, a), firstM m)
 
-class (Category (Dom f), Category (Cod f)) => Functor f where
-    type Dom f      :: * -> * -> *
-    type Cod f      :: * -> * -> *
-    type f :%: a    :: *
-    (%)             :: f -> Dom f a b -> Cod f (f :%: a) (f :%: b)
+instance Arrow Mealy where
+    arr = liftM
+    first = firstM
+
+apply :: Mealy i o -> [i] -> [o]
+apply _ []      = []
+apply (Mealy k) (x:xs) = let (o, m) = k x in
+    [o] ++ apply m xs

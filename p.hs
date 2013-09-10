@@ -259,5 +259,3 @@ through p p' = runP $ zipWith p p' (\ (o, f) -> f o)
 
 disconnectIn Halt = Halt
 disconnectIn (Emit xs p) = Emit xs (disconnectIn p)
-
-disconnect p = drain $ disconnectIn p
