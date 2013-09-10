@@ -2,10 +2,11 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GADTs #-}
 
-import Prelude hiding (repeat)
+import Prelude hiding (repeat, zip, zipWith)
 import Control.Exception (Exception, IOException, SomeException, onException, throwIO, try)
 import Data.Typeable (Typeable)
-import System.IO (openFile, IOMode (ReadMode), hClose, hIsEOF, hGetLine)
+import System.IO (openFile, IOMode (ReadMode, WriteMode, AppendMode), hClose,
+                  hIsEOF, hGetLine, hPutStr)
 import Control.Exception (throw)
 
 main = undefined
@@ -193,13 +194,70 @@ zipWithAll x y f =
             awaitROr pL (\ i' ->
             emitT (f i i') Halt))
 
+tee :: Proc f a -> Proc f b -> Tee a b c -> Proc f c 
 tee p p' Halt               = kill p +-+ kill p' +-+ Halt
 tee p p' (Emit xs t)        = Emit xs (tee p p' t)
-tee p p' (Await L k t' c)   = case p of
-    Halt            -> kill p' +-+ Halt
-    (Emit o t)      -> feedL o t p' k t' c
-  where
-    feedL [] p p' k t t' = tee p p' (Await L k t t')
-    feedL (x:xs) p p' k t t' = case k x of
-        Await e k' t2 t'2 -> case e of
-            Left _      -> feedL xs p p' k' t2 t'2
+tee p p' t@(Await L k t' c) = case p of
+    Halt                -> kill p' +-+ Halt
+    (Await rL kL tL cL) -> Await rL
+                                 ((\ x -> tee x p' t) . kL)
+                                 (tee tL p' t)
+                                 (tee cL p' t)
+    (Emit xs xp)        -> feedL xs xp p' k t' c
+tee p p' t@(Await R kR pR cR) = case p' of
+    Halt                    -> kill p +-+ Halt
+    (Await rR kR' pR' cR')  -> Await rR
+                                     ((\ x -> tee p x t) . kR')
+                                     (tee p pR' t)
+                                     (tee p cR' t)
+    (Emit ys yp)            -> feedR ys yp p kR pR cR
+
+feedL :: [a]
+      -> Proc f a
+      -> Proc f b
+      -> (a -> Proc (T a b) c)
+      -> Proc (T a b) c
+      -> Proc (T a b) c
+      -> Proc f c
+feedL [] tail other recv fb c = tee tail other $ Await L recv fb c
+feedL (x:xs) tail other recv fb c = let t2 = recv x in case t2 of
+    Await L recv2 fb2 c2    -> feedL xs tail other recv2 fb2 c2
+    Await _ _ _ _           -> tee (Emit xs tail) other t2
+    p                       -> tee (Emit xs tail) other p
+
+feedR :: [a]
+      -> Proc f a
+      -> Proc f b
+      -> (a -> Proc (T b a) c)
+      -> Proc (T b a) c
+      -> Proc (T b a) c
+      -> Proc f c
+feedR [] tail other recv fb c = tee other tail $ Await R recv fb c
+feedR (x:xs) tail other recv fb c = let t2 = recv x in case t2 of
+    Await R recv2 fb2 c2    -> feedR xs tail other recv2 fb2 c2
+    Await _ _ _ _           -> tee other (Emit xs tail) t2
+    p                       -> tee other (Emit xs tail) p
+
+type Sink f o = Proc f ()
+
+fileW :: String -> FilePath -> Bool -> Sink IO String
+fileW s fn append =
+    let acq = openFile fn (if append then AppendMode else WriteMode)
+    in  resource acq hClose (\ h -> hPutStr h s)
+
+runP :: Proc f (f o) -> Proc f o
+runP Halt               = Halt
+runP (Await r k p c)    = Await r (runP . k) (runP p) (runP c)
+runP (Emit [] p)        = runP p
+runP (Emit (x:xs) p)    = Await x (\ o -> emit o (runP $ emitAll xs p)) Halt Halt
+
+zipWith p p' f = tee p p' (zipWithP f)
+
+to p snk = runP (zipWith p snk (\(o, f) -> f o))
+
+through p p' = runP $ zipWith p p' (\ (o, f) -> f o)
+
+disconnectIn Halt = Halt
+disconnectIn (Emit xs p) = Emit xs (disconnectIn p)
+
+disconnect p = drain $ disconnectIn p
