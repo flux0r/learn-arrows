@@ -1,30 +1,66 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NoImplicitPrelude, TypeOperators, TypeFamilies,
+             FlexibleContexts, UndecidableInstances, GADTs #-}
 
-import Prelude hiding ((.), id)
-import Control.Category
-import Control.Arrow
+import qualified Prelude as P
 
-main = undefined
+main = P.undefined
 
-newtype M i o = M { runM :: i -> (o, M i o) }
+type Ob c a = c a a
 
-instance Category M where
-    id      = M $ \ i -> (i, id)
-    f . g   = M $ \ i -> let (o', m') = runM g i
-                             (o, m) = runM f o'
-                         in  (o, m . m')
+class Category c where
+    src :: c x y -> Ob c x
+    tgt :: c x y -> Ob c y
+    (.) :: c y z -> c x y -> c x z
 
-data S k i o r = Halt
-             | Emit o r
-             | Await (i -> r) (k i) r
+class (Category (Dom f), Category (Cod f)) => Functor f where
+    type Dom f  :: * -> * -> *
+    type Cod f  :: * -> * -> *
+    type f % a  :: *
+    (<$>)       :: f -> Dom f a b -> Cod f (f % a) (f % b)
 
-instance Functor (S k i o) where
-    fmap f Halt             = Halt
-    fmap f (Emit o r)       = Emit o (f r)
-    fmap f (Await k o r)    = Await (f . k) o (f r)
+data Id (c :: * -> * -> *) = Id
 
-instance Arrow M where
-    arr f = let m = M $ \ i -> (f i, m) in m
-    first (M k) = M $ \ (x, y) ->
-        let (o, m) = k x
-        in  ((o, y), first m)
+instance Category c => Functor (Id c) where
+    type Dom (Id c) = c
+    type Cod (Id c) = c
+    type Id c % a   = a
+    _ <$> f         = f
+
+data g :.: h where
+    (:.:) :: (Functor g, Functor h, Cod h ~ Dom g) => g -> h -> g :.: h
+
+instance (Category (Cod g), Category (Dom h)) => Functor (g :.: h) where
+  type Dom (g :.: h)    = Dom h
+  type Cod (g :.: h)    = Cod g
+  type (g :.: h) % a    = g % (h % a)
+  (g :.: h) <$> f = g <$> (h <$> f)
+
+data COb :: (* -> * -> *) -> *
+
+data Cat :: * -> * -> * where
+    CMor    :: (Functor f, Category (Dom f), Category (Cod f))
+            => f
+            -> Cat (COb (Dom f)) (COb (Cod f))
+
+instance Category Cat where
+    src (CMor _)        = CMor Id
+    tgt (CMor _)        = CMor Id
+    CMor c . CMor c'    = CMor (c :.: c')
+
+data X :: (* -> * -> *) -> (* -> * -> *) -> * -> * -> * where
+    X :: c a b -> c' a' b' -> X c c' (a, a') (b, b')
+
+instance (Category c, Category c') => Category (c `X` c') where
+    src (c `X` c')  = src c `X` src c'
+    tgt (c `X` c')  = tgt c `X` tgt c'
+    (c `X` c') . (k `X` k') = (c . k) `X` (c' . k')
+
+class Category c => HasBinaryProducts c where
+    type BinaryProduct (c :: * -> * -> *) x1 x2 :: *
+    p1 :: Ob c x1 -> Ob c x2 -> c (BinaryProduct c x1 x2) x1
+    p2 :: Ob c x1 -> Ob c x2 -> c (BinaryProduct c x1 x2) x2
+    (&&&) :: c y x1 -> c y x2 -> c y (BinaryProduct c x1 x2)
+    (***) :: c x1 y1
+          -> c x2 y2
+          -> (c (BinaryProduct c x1 x2) (BinaryProduct c y1 y2))
+    l *** r = (l . p1 (src l) (src r)) &&& (r . p2 (src l) (src r))
