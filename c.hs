@@ -33,7 +33,7 @@ instance (Category (Cod g), Category (Dom h)) => Functor (g :.: h) where
   type Dom (g :.: h)    = Dom h
   type Cod (g :.: h)    = Cod g
   type (g :.: h) % a    = g % (h % a)
-  (g :.: h) <$> f = g <$> (h <$> f)
+  (g :.: h) <$> f = g <$> (h <$> f) 
 
 data COb :: (* -> * -> *) -> *
 
@@ -64,3 +64,35 @@ class Category c => HasBinaryProducts c where
           -> c x2 y2
           -> (c (BinaryProduct c x1 x2) (BinaryProduct c y1 y2))
     l *** r = (l . p1 (src l) (src r)) &&& (r . p2 (src l) (src r))
+
+data ProductF (k :: * -> * -> *) = ProductF
+instance HasBinaryProducts c => Functor (ProductF c) where
+    type Dom (ProductF c)       = c `X` c
+    type Cod (ProductF c)       = c
+    type ProductF c % (x, y)    = BinaryProduct c x y
+    ProductF <$> (p `X` q)      = p *** q
+
+class Category c => HasTerminalOb c where
+    type TerminalOb c       :: *
+    terminal                :: Ob c (TerminalOb c)
+    terminate               :: Ob c a -> c a (TerminalOb c)
+
+class (Functor f, Dom f ~ (Cod f `X` Cod f)) => TensorProduct f where
+    type Unit f         :: *
+    unit                :: f -> Ob (Cod f) (Unit f)
+    lUnitor :: Cod f ~ c => f -> Ob c a -> c (f % (Unit f, a)) a
+    rUnitor :: Cod f ~ c => f -> Ob c a -> c (f % (a, Unit f)) a
+    associator :: Cod f ~ c
+               => f
+               -> Ob c a
+               -> Ob c b
+               -> Ob c d
+               -> c (f % (f % (a, b), d)) (f % (a, f % (b, d)))
+
+instance (HasTerminalOb c, HasBinaryProducts c)
+         => TensorProduct (ProductF c) where
+    type Unit (ProductF c) = TerminalOb c
+    unit _ = terminal
+    lUnitor _ x = p2 terminal x
+    rUnitor _ x = p1 x terminal
+    associator _ x y z = (p1 x y . p1 (x *** y) z) &&& (p2 x y *** z)
