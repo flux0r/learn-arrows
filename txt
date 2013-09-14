@@ -1,0 +1,8 @@
+Using the initial
+f
+-algebra methology to program with and reason about such datatypes
+forces us to mingle the pure and effectful parts of our programs and proofs in a way that
+obscures their essential properties (as we demonstrate in
+Section 5
+). By abstracting out the
+effectful parts, we arrive at the concept of init

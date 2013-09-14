@@ -7,9 +7,15 @@ main = P.undefined
 
 type Ob c a = c a a
 
+-- src (g . f) = src f
+-- tgt (g . f) = tgt g
+--
+-- src (c x y) = x
+-- tgt (c x y) = y
+--
+-- (h . g) . f = h . (g . f)
 class Category c where
-    src :: c x y -> Ob c x
-    tgt :: c x y -> Ob c y
+    id :: c a a
     (.) :: c y z -> c x y -> c x z
 
 class (Category (Dom f), Category (Cod f)) => Functor f where
